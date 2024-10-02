@@ -43,7 +43,6 @@ import org.apache.kyuubi.config.KyuubiConf._
 import org.apache.kyuubi.config.KyuubiReservedKeys._
 import org.apache.kyuubi.engine.{ApplicationInfo, ApplicationManagerInfo, ApplicationState, KillResponse, KyuubiApplicationManager}
 import org.apache.kyuubi.operation.{BatchJobSubmission, FetchOrientation, OperationState}
-import org.apache.kyuubi.server.KyuubiServer
 import org.apache.kyuubi.server.api.ApiRequestContext
 import org.apache.kyuubi.server.api.v1.BatchesResource._
 import org.apache.kyuubi.server.metadata.MetadataManager
@@ -67,7 +66,7 @@ private[v1] class BatchesResource extends ApiRequestContext with Logging {
     fe.getConf.get(ENGINE_SECURITY_ENABLED)
 
   private def batchV2Enabled(reqConf: Map[String, String]): Boolean = {
-    KyuubiServer.kyuubiServer.getConf.get(BATCH_SUBMITTER_ENABLED) &&
+    fe.getConf.get(BATCH_SUBMITTER_ENABLED) &&
     reqConf.getOrElse(BATCH_IMPL_VERSION.key, fe.getConf.get(BATCH_IMPL_VERSION)) == "2"
   }
 
@@ -77,6 +76,7 @@ private[v1] class BatchesResource extends ApiRequestContext with Logging {
       kyuubiInstance =>
         new InternalRestClient(
           kyuubiInstance,
+          fe.getConf.get(FRONTEND_PROXY_HTTP_CLIENT_IP_HEADER),
           internalSocketTimeout,
           internalConnectTimeout,
           internalSecurityEnabled,
@@ -348,7 +348,7 @@ private[v1] class BatchesResource extends ApiRequestContext with Logging {
         } else {
           val internalRestClient = getInternalRestClient(metadata.kyuubiInstance)
           try {
-            internalRestClient.getBatch(userName, batchId)
+            internalRestClient.getBatch(userName, fe.getIpAddress, batchId)
           } catch {
             case e: KyuubiRestException =>
               error(s"Error redirecting get batch[$batchId] to ${metadata.kyuubiInstance}", e)
@@ -395,7 +395,8 @@ private[v1] class BatchesResource extends ApiRequestContext with Logging {
       @QueryParam("createTime") createTime: Long,
       @QueryParam("endTime") endTime: Long,
       @QueryParam("from") from: Int,
-      @QueryParam("size") @DefaultValue("100") size: Int): GetBatchesResponse = {
+      @QueryParam("size") @DefaultValue("100") size: Int,
+      @QueryParam("desc") @DefaultValue("false") desc: Boolean): GetBatchesResponse = {
     require(
       createTime >= 0 && endTime >= 0 && (endTime == 0 || createTime <= endTime),
       "Invalid time range")
@@ -413,7 +414,7 @@ private[v1] class BatchesResource extends ApiRequestContext with Logging {
       requestName = batchName,
       createTime = createTime,
       endTime = endTime)
-    val batches = sessionManager.getBatchesFromMetadataStore(filter, from, size)
+    val batches = sessionManager.getBatchesFromMetadataStore(filter, from, size, desc)
     new GetBatchesResponse(from, batches.size, batches.asJava)
   }
 
@@ -458,7 +459,7 @@ private[v1] class BatchesResource extends ApiRequestContext with Logging {
           new OperationLog(dummyLogs, dummyLogs.size)
         } else if (fe.connectionUrl != metadata.kyuubiInstance) {
           val internalRestClient = getInternalRestClient(metadata.kyuubiInstance)
-          internalRestClient.getBatchLocalLog(userName, batchId, from, size)
+          internalRestClient.getBatchLocalLog(userName, fe.getIpAddress, batchId, from, size)
         } else if (batchV2Enabled(metadata.requestConf) &&
           // in batch v2 impl, the operation state is changed from PENDING to RUNNING
           // before being added to SessionManager.
@@ -498,7 +499,11 @@ private[v1] class BatchesResource extends ApiRequestContext with Logging {
 
     val sessionHandle = formatSessionHandle(batchId)
     sessionManager.getBatchSession(sessionHandle).map { batchSession =>
-      fe.getSessionUser(batchSession.user)
+      val userName = fe.getSessionUser(batchSession.user)
+      val ipAddress = fe.getIpAddress
+      batchSession.batchJobSubmissionOp.withOperationLog {
+        warn(s"Received kill batch request from $userName/$ipAddress")
+      }
       sessionManager.closeSession(batchSession.handle)
       val (killed, msg) = batchSession.batchJobSubmissionOp.getKillMessage
       new CloseBatchResponse(killed, msg)
@@ -510,7 +515,7 @@ private[v1] class BatchesResource extends ApiRequestContext with Logging {
         } else if (batchV2Enabled(metadata.requestConf) && metadata.state == "INITIALIZED" &&
           // there is a chance that metadata is outdated, then `cancelUnscheduledBatch` fails
           // and returns false
-          batchService.get.cancelUnscheduledBatch(batchId)) {
+          fe.batchService.get.cancelUnscheduledBatch(batchId)) {
           new CloseBatchResponse(true, s"Unscheduled batch $batchId is canceled.")
         } else if (batchV2Enabled(metadata.requestConf) && metadata.kyuubiInstance == null) {
           // code goes here indicates metadata is outdated, recursively calls itself to refresh
@@ -520,7 +525,7 @@ private[v1] class BatchesResource extends ApiRequestContext with Logging {
           info(s"Redirecting delete batch[$batchId] to ${metadata.kyuubiInstance}")
           val internalRestClient = getInternalRestClient(metadata.kyuubiInstance)
           try {
-            internalRestClient.deleteBatch(metadata.username, batchId)
+            internalRestClient.deleteBatch(metadata.username, fe.getIpAddress, batchId)
           } catch {
             case e: KyuubiRestException =>
               error(s"Error redirecting delete batch[$batchId] to ${metadata.kyuubiInstance}", e)
@@ -545,7 +550,7 @@ private[v1] class BatchesResource extends ApiRequestContext with Logging {
       resourceFileInputStream: InputStream,
       resourceFileName: String,
       formDataMultiPartOpt: Option[FormDataMultiPart]): Option[JPath] = {
-    val uploadFileFolderPath = batchResourceUploadFolderPath(batchId)
+    val uploadFileFolderPath = KyuubiApplicationManager.sessionUploadFolderPath(batchId)
     try {
       handleUploadingResourceFile(
         request,
@@ -568,6 +573,7 @@ private[v1] class BatchesResource extends ApiRequestContext with Logging {
       uploadFileFolderPath: JPath): Unit = {
     try {
       val tempFile = Utils.writeToTempFile(inputStream, uploadFileFolderPath, fileName)
+      fe.sessionManager.tempFileService.addPathToExpiration(tempFile.toPath)
       request.setResource(tempFile.getPath)
     } catch {
       case e: Exception =>
@@ -599,10 +605,12 @@ private[v1] class BatchesResource extends ApiRequestContext with Logging {
             val tempFilePaths = fileParts.map { filePart =>
               val fileName = filePart.getContentDisposition.getFileName
               try {
-                Utils.writeToTempFile(
+                val tempFile = Utils.writeToTempFile(
                   filePart.getValueAs(classOf[InputStream]),
                   uploadFileFolderPath,
-                  fileName).getPath
+                  fileName)
+                fe.sessionManager.tempFileService.addPathToExpiration(tempFile.toPath)
+                tempFile.getPath
               } catch {
                 case e: Exception =>
                   throw new RuntimeException(
@@ -642,6 +650,8 @@ object BatchesResource {
     Option(batchState).exists(bt => VALID_BATCH_STATES.contains(bt.toUpperCase(Locale.ROOT)))
   }
 
-  def batchResourceUploadFolderPath(batchId: String): JPath =
-    KyuubiApplicationManager.uploadWorkDir.resolve(s"batch-$batchId")
+  def batchResourceUploadFolderPath(sessionId: String): JPath = {
+    require(StringUtils.isNotBlank(sessionId))
+    KyuubiApplicationManager.uploadWorkDir.resolve(sessionId)
+  }
 }

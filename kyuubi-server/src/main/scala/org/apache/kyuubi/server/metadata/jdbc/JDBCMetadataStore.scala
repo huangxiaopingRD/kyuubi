@@ -80,7 +80,8 @@ class JDBCMetadataStore(conf: KyuubiConf) extends MetadataStore with Logging {
   hikariConfig.setPoolName("jdbc-metadata-store-pool")
 
   @VisibleForTesting
-  implicit private[kyuubi] val hikariDataSource = new HikariDataSource(hikariConfig)
+  implicit private[kyuubi] val hikariDataSource: HikariDataSource =
+    new HikariDataSource(hikariConfig)
   private val mapper = new ObjectMapper().registerModule(DefaultScalaModule)
 
   private val terminalStates = OperationState.terminalStates.map(x => s"'$x'").mkString(", ")
@@ -252,7 +253,11 @@ class JDBCMetadataStore(conf: KyuubiConf) extends MetadataStore with Logging {
     }
   }
 
-  override def getMetadataList(filter: MetadataFilter, from: Int, size: Int): Seq[Metadata] = {
+  override def getMetadataList(
+      filter: MetadataFilter,
+      from: Int,
+      size: Int,
+      desc: Boolean = false): Seq[Metadata] = {
     val queryBuilder = new StringBuilder
     val params = ListBuffer[Any]()
     queryBuilder.append("SELECT ")
@@ -260,6 +265,7 @@ class JDBCMetadataStore(conf: KyuubiConf) extends MetadataStore with Logging {
     queryBuilder.append(s" FROM $METADATA_TABLE")
     queryBuilder.append(s" ${assembleWhereClause(filter, params)}")
     queryBuilder.append(" ORDER BY key_id ")
+    queryBuilder.append(if (desc) "DESC " else "ASC ")
     queryBuilder.append(dialect.limitClause(size, from))
     val query = queryBuilder.toString
     JdbcUtils.withConnection { connection =>

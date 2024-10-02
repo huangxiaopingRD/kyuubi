@@ -55,7 +55,7 @@ jobs:
         exclude-tags: [""]
         comment: ["normal"]
         include:
-          - java: 17
+          - java: 21
             spark: '4.0'
             spark-archive: '-Pscala-2.13'
             exclude-tags: ''
@@ -77,7 +77,7 @@ jobs:
             comment: 'verify-on-spark-3.4-binary'
           - java: 17
             spark: '3.5'
-            spark-archive: '-Pscala-2.13 -Dspark.archive.mirror=https://archive.apache.org/dist/spark/spark-4.0.0-preview1 -Dspark.archive.name=spark-4.0.0-preview1-bin-hadoop3.tgz'
+            spark-archive: '-Pscala-2.13 -Dspark.archive.mirror=https://archive.apache.org/dist/spark/spark-4.0.0-preview2 -Dspark.archive.name=spark-4.0.0-preview2-bin-hadoop3.tgz'
             exclude-tags: '-Dmaven.plugin.scalatest.exclude.tags=org.scalatest.tags.Slow,org.apache.kyuubi.tags.DeltaTest,org.apache.kyuubi.tags.IcebergTest,org.apache.kyuubi.tags.PaimonTest,org.apache.kyuubi.tags.SparkLocalClusterTest'
             comment: 'verify-on-spark-4.0-binary'
     env:
@@ -162,6 +162,7 @@ jobs:
         run: |
           TEST_MODULES="!externals/kyuubi-flink-sql-engine,!integration-tests/kyuubi-flink-it"
           ./build/mvn clean install ${MVN_OPT} -pl ${TEST_MODULES} -am \
+          -Dmaven.plugin.scalatest.exclude.tags=org.scalatest.tags.Slow,org.apache.kyuubi.tags.SparkLocalClusterTest \
           -Pscala-${{ matrix.scala }} -Pjava-${{ matrix.java }} -Pspark-${{ matrix.spark }}
       - name: Upload test logs
         if: failure()
@@ -346,6 +347,19 @@ jobs:
         run: |
           TEST_MODULES="externals/kyuubi-hive-sql-engine,integration-tests/kyuubi-hive-it"
           ./build/mvn ${MVN_OPT} ${{ matrix.hive-archive }} -pl ${TEST_MODULES} -am clean install -DskipTests
+          # unpack avatica-1.8.0.jar and delete Jackson classes to workaround CALCITE-1224
+          if [[ "${{ matrix.hive-archive }}" == *apache-hive-2.3.10-bin.tar.gz* ]]; then
+            HIVE_2310_LIB="$PWD/externals/kyuubi-download/target/apache-hive-2.3.10-bin/lib"
+            mkdir avatica-1.8.0-unpack
+            cd avatica-1.8.0-unpack
+            jar xf $HIVE_2310_LIB/avatica-1.8.0.jar
+            rm -rf com/fasterxml/jackson org/slf4j
+            jar cf avatica-1.8.0-patched.jar .
+            rm $HIVE_2310_LIB/avatica-1.8.0.jar
+            mv avatica-1.8.0-patched.jar $HIVE_2310_LIB/
+            cd ..
+            rm -rf avatica-1.8.0-unpack
+          fi
           ./build/mvn ${MVN_OPT} ${{ matrix.hive-archive }} -pl ${TEST_MODULES} test
       - name: Upload test logs
         if: failure()
@@ -418,7 +432,7 @@ jobs:
           # passthrough CI into build container
           build-args: |
             CI=${CI}
-            MVN_ARG=--flink-provided --hive-provided -Dmaven.javadoc.skip=true -Drat.skip=true -Dscalastyle.skip=true -Dspotless.check.skip -DskipTests
+            MVN_ARG=--flink-provided --hive-provided
           context: .
           file: build/Dockerfile.CI
           load: true
@@ -434,8 +448,8 @@ jobs:
           # https://minikube.sigs.k8s.io/docs/handbook/pushing/#7-loading-directly-to-in-cluster-container-runtime
           minikube image load apache/kyuubi:latest
           # pre-install spark into minikube
-          docker pull apache/spark:3.5.1
-          minikube image load apache/spark:3.5.1
+          docker pull apache/spark:3.5.2
+          minikube image load apache/spark:3.5.2
       - name: kubectl pre-check
         run: |
           kubectl get nodes

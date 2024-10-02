@@ -665,6 +665,13 @@ object KyuubiConf {
       .version("1.4.0")
       .fallbackConf(FRONTEND_MAX_MESSAGE_SIZE)
 
+  val FRONTEND_THRIFT_CLIENT_MAX_MESSAGE_SIZE: ConfigEntry[Int] =
+    buildConf("kyuubi.frontend.thrift.client.max.message.size")
+      .doc("Maximum message size in bytes a thrift client will receive.")
+      .version("1.9.3")
+      .intConf
+      .createWithDefault(1 * 1024 * 1024 * 1024) // follow HIVE-26633 to use 1g as default value
+
   val FRONTEND_THRIFT_HTTP_REQUEST_HEADER_SIZE: ConfigEntry[Int] =
     buildConf("kyuubi.frontend.thrift.http.request.header.size")
       .doc("Request header size in bytes, when using HTTP transport mode. Jetty defaults used.")
@@ -697,6 +704,13 @@ object KyuubiConf {
     buildConf("kyuubi.frontend.thrift.http.compression.enabled")
       .doc("Enable thrift http compression via Jetty compression support")
       .version("1.6.0")
+      .booleanConf
+      .createWithDefault(true)
+
+  val FRONTEND_JETTY_SEND_VERSION_ENABLED: ConfigEntry[Boolean] =
+    buildConf("kyuubi.frontend.jetty.sendVersion.enabled")
+      .doc("Whether to send Jetty version in HTTP response.")
+      .version("1.9.3")
       .booleanConf
       .createWithDefault(true)
 
@@ -841,6 +855,25 @@ object KyuubiConf {
       .doc("User-defined authentication implementation of " +
         "org.apache.kyuubi.service.authentication.PasswdAuthenticationProvider")
       .version("1.3.0")
+      .serverOnly
+      .stringConf
+      .createOptional
+
+  val AUTHENTICATION_CUSTOM_BASIC_CLASS: ConfigEntry[Option[String]] =
+    buildConf("kyuubi.authentication.custom.basic.class")
+      .doc("User-defined authentication implementation of " +
+        "org.apache.kyuubi.service.authentication.PasswdAuthenticationProvider " +
+        "for http basic authentication.")
+      .version("1.10.0")
+      .serverOnly
+      .fallbackConf(AUTHENTICATION_CUSTOM_CLASS)
+
+  val AUTHENTICATION_CUSTOM_BEARER_CLASS: OptionalConfigEntry[String] =
+    buildConf("kyuubi.authentication.custom.bearer.class")
+      .doc("User-defined authentication implementation of " +
+        "org.apache.kyuubi.service.authentication.TokenAuthenticationProvider " +
+        "for http bearer authentication.")
+      .version("1.10.0")
       .serverOnly
       .stringConf
       .createOptional
@@ -1316,7 +1349,9 @@ object KyuubiConf {
   val KUBERNETES_APPLICATION_STATE_SOURCE: ConfigEntry[String] =
     buildConf("kyuubi.kubernetes.application.state.source")
       .doc("The source to retrieve the application state from. The valid values are " +
-        "pod and container. If the source is container and there is container inside the pod " +
+        "pod and container. When the pod is in a terminated state, the container state" +
+        " will be ignored, and the application state will be determined based on the pod state." +
+        " If the source is container and there is container inside the pod " +
         s"with the name of ${KUBERNETES_APPLICATION_STATE_CONTAINER.key}, the application state " +
         s"will be from the matched container state. " +
         s"Otherwise, the application state will be from the pod state.")
@@ -3079,6 +3114,22 @@ object KyuubiConf {
       .serverOnly
       .timeConf
       .createWithDefaultString("PT30M")
+
+  val SERVER_TEMP_FILE_EXPIRE_TIME: ConfigEntry[Long] =
+    buildConf("kyuubi.server.tempFile.expireTime")
+      .doc("Expiration timout for cleanup server-side temporary files, e.g. operation logs.")
+      .version("1.10.0")
+      .serverOnly
+      .timeConf
+      .createWithDefaultString("P30D")
+
+  val SERVER_TEMP_FILE_EXPIRE_MAX_COUNT: OptionalConfigEntry[Int] =
+    buildConf("kyuubi.server.tempFile.maxCount")
+      .doc("The upper threshold size of server-side temporary file paths to cleanup")
+      .version("1.10.0")
+      .serverOnly
+      .intConf
+      .createOptional
 
   val SERVER_ADMINISTRATORS: ConfigEntry[Set[String]] =
     buildConf("kyuubi.server.administrators")

@@ -28,7 +28,6 @@ import org.apache.kyuubi.engine.KyuubiApplicationManager
 import org.apache.kyuubi.engine.spark.SparkProcessBuilder
 import org.apache.kyuubi.events.{EventBus, KyuubiSessionEvent}
 import org.apache.kyuubi.operation.OperationState
-import org.apache.kyuubi.server.api.v1.BatchesResource
 import org.apache.kyuubi.server.metadata.api.Metadata
 import org.apache.kyuubi.session.SessionType.SessionType
 import org.apache.kyuubi.shaded.hive.service.rpc.thrift.TProtocolVersion
@@ -83,7 +82,7 @@ class KyuubiBatchSession(
     sessionConf.getBatchConf(batchType) ++ sessionManager.validateBatchConf(conf)
 
   private[kyuubi] def resourceUploadFolderPath: Path =
-    BatchesResource.batchResourceUploadFolderPath(batchJobSubmissionOp.batchId)
+    KyuubiApplicationManager.sessionUploadFolderPath(handle.identifier.toString)
 
   val optimizedConf: Map[String, String] = {
     val confOverlay = sessionManager.sessionConfAdvisor.map(_.getConfOverlay(
@@ -164,7 +163,10 @@ class KyuubiBatchSession(
         Map(KyuubiConf.KUBERNETES_CONTEXT.key -> context)
       }.getOrElse(Map.empty) ++ appMgrInfo.kubernetesInfo.namespace.map { namespace =>
         Map(KyuubiConf.KUBERNETES_NAMESPACE.key -> namespace)
-      }.getOrElse(Map.empty)
+      }.getOrElse(Map.empty) ++ (batchJobSubmissionOp.builder match {
+        case builder: SparkProcessBuilder => builder.appendPodNameConf(optimizedConf)
+        case _ => Map.empty[String, String]
+      })
     }
 
     (metadata, fromRecovery) match {

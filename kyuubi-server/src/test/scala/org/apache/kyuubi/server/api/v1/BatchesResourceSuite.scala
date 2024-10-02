@@ -42,7 +42,7 @@ import org.apache.kyuubi.engine.spark.SparkBatchProcessBuilder
 import org.apache.kyuubi.metrics.{MetricsConstants, MetricsSystem}
 import org.apache.kyuubi.operation.{BatchJobSubmission, OperationState}
 import org.apache.kyuubi.operation.OperationState.OperationState
-import org.apache.kyuubi.server.{KyuubiBatchService, KyuubiRestFrontendService}
+import org.apache.kyuubi.server.KyuubiRestFrontendService
 import org.apache.kyuubi.server.http.util.HttpAuthUtils.{basicAuthorizationHeader, AUTHORIZATION_HEADER}
 import org.apache.kyuubi.server.metadata.api.{Metadata, MetadataFilter}
 import org.apache.kyuubi.service.authentication.{AnonymousAuthenticationProviderImpl, AuthUtils}
@@ -64,7 +64,7 @@ class BatchesV2ResourceSuite extends BatchesResourceSuiteBase {
 
   override def afterEach(): Unit = {
     val sessionManager = fe.be.sessionManager.asInstanceOf[KyuubiSessionManager]
-    val batchService = server.getServices.collectFirst { case b: KyuubiBatchService => b }.get
+    val batchService = fe.asInstanceOf[KyuubiRestFrontendService].batchService.get
     sessionManager.getBatchesFromMetadataStore(MetadataFilter(), 0, Int.MaxValue)
       .foreach { batch => batchService.cancelUnscheduledBatch(batch.getId) }
     super.afterEach()
@@ -472,6 +472,25 @@ abstract class BatchesResourceSuiteBase extends KyuubiFunSuite
       .header(AUTHORIZATION_HEADER, basicAuthorizationHeader("anonymous"))
       .get()
     assert(response7.getStatus === 500)
+
+    val response8 = webTarget.path("api/v1/batches")
+      .queryParam("from", "0")
+      .queryParam("size", "1")
+      .queryParam("desc", "false")
+      .request(MediaType.APPLICATION_JSON_TYPE)
+      .header(AUTHORIZATION_HEADER, basicAuthorizationHeader("anonymous"))
+      .get()
+    val firstBatch = response8.readEntity(classOf[GetBatchesResponse]).getBatches.get(0)
+
+    val response9 = webTarget.path("api/v1/batches")
+      .queryParam("from", "0")
+      .queryParam("size", "1")
+      .queryParam("desc", "true")
+      .request(MediaType.APPLICATION_JSON_TYPE)
+      .header(AUTHORIZATION_HEADER, basicAuthorizationHeader("anonymous"))
+      .get()
+    val lastBatch = response9.readEntity(classOf[GetBatchesResponse]).getBatches.get(0)
+    assert(firstBatch.getCreateTime < lastBatch.getCreateTime)
   }
 
   test("negative request") {
