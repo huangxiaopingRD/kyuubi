@@ -71,6 +71,15 @@ object TableCommands extends CommandSpecs[TableCommandSpec] {
     AddColumns.copy(classname = cmd)
   }
 
+  // Spark 4 replaced AlterColumn (singular) with AlterColumns (plural),
+  // and the child field was renamed from "child" to "table".
+  val AlterColumns = {
+    val cmd = "org.apache.spark.sql.catalyst.plans.logical.AlterColumns"
+    val tableDesc = TableDesc("table", classOf[ResolvedTableTableExtractor])
+    val uriDescs = Seq(UriDesc("table", classOf[ResolvedTableURIExtractor]))
+    TableCommandSpec(cmd, Seq(tableDesc), ALTERTABLE_ADDCOLS, uriDescs = uriDescs)
+  }
+
   val DropColumns = {
     val cmd = "org.apache.spark.sql.catalyst.plans.logical.DropColumns"
     AddColumns.copy(classname = cmd)
@@ -683,6 +692,7 @@ object TableCommands extends CommandSpecs[TableCommandSpec] {
     TruncatePartition,
     AddColumns,
     AlterColumn,
+    AlterColumns,
     DropColumns,
     ReplaceColumns,
     RenameColumn,

@@ -125,10 +125,16 @@ trait DataMaskingTestBase extends AnyFunSuite with SparkSessionProvider with Bef
   test("complex udf") {
     val result =
       Seq(Row(md5Hex("1"), "xxxxx", "worlx", Timestamp.valueOf("2018-01-01 00:00:00"), "Xorld"))
+    // Spark 4+ resolves coalesce / aggregate types strictly. Some catalogs still type `max(valueN)`
+    // from table metadata as INT; cast the argument to string so masked values stay varchar through
+    // the aggregate and coalesce.
     checkAnswer(
       bob,
-      "SELECT coalesce(max(value1), 1), coalesce(max(value2), 1), coalesce(max(value3), 1), " +
-        "coalesce(max(value4), timestamp '2018-01-01 22:33:44'), coalesce(max(value5), 1) " +
+      "SELECT coalesce(max(cast(value1 as string)), cast(1 as string)), " +
+        "coalesce(max(cast(value2 as string)), cast(1 as string)), " +
+        "coalesce(max(cast(value3 as string)), cast(1 as string)), " +
+        "coalesce(max(value4), timestamp '2018-01-01 22:33:44'), " +
+        "coalesce(max(cast(value5 as string)), cast(1 as string)) " +
         "FROM default.src where key = 1",
       result)
   }
@@ -179,8 +185,9 @@ trait DataMaskingTestBase extends AnyFunSuite with SparkSessionProvider with Bef
   }
 
   test("join on an unmasked table") {
+    // Cast both sides to string: masked value1 is md5 text while unmasked stays numeric in storage.
     val s = "SELECT a.value1, b.value1 FROM default.src a" +
-      " join default.unmasked b on a.value1=b.value1"
+      " join default.unmasked b on cast(a.value1 as string) = cast(b.value1 as string)"
     checkAnswer(bob, s, Nil)
     checkAnswer(bob, s, Nil) // just for testing query multiple times, don't delete it
   }
@@ -194,9 +201,10 @@ trait DataMaskingTestBase extends AnyFunSuite with SparkSessionProvider with Bef
   }
 
   test("self join on a masked table and filter the masked column with original value") {
+    // Compare as string so JDBC/Iceberg catalogs do not promote literals to BIGINT vs md5 text.
     val s = "SELECT a.value1, b.value1 FROM default.src a" +
       " join default.src b on a.value1=b.value1" +
-      " where a.value1='1' and b.value1='1'"
+      " where cast(a.value1 as string)='1' and cast(b.value1 as string)='1'"
     checkAnswer(bob, s, Nil)
     checkAnswer(bob, s, Nil) // just for testing query multiple times, don't delete it
   }
@@ -263,9 +271,9 @@ trait DataMaskingTestBase extends AnyFunSuite with SparkSessionProvider with Bef
   test("union an unmasked table") {
     val s = """
       SELECT value1 from (
-           SELECT a.value1 FROM default.src a where a.key = 1
+           SELECT cast(a.value1 as string) AS value1 FROM default.src a where a.key = 1
            union
-          (SELECT b.value1 FROM default.unmasked b)
+          (SELECT cast(b.value1 as string) AS value1 FROM default.unmasked b)
       ) c order by value1
       """
     checkAnswer(bob, s, Seq(Row("1"), Row("2"), Row("3"), Row("4"), Row("5"), Row(md5Hex("1"))))
