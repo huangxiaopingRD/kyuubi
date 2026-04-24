@@ -35,7 +35,7 @@ import org.apache.kyuubi.util.AssertionUtils._
 class PaimonCatalogRangerSparkExtensionSuite extends RangerSparkExtensionSuite {
   override protected val catalogImpl: String = "hive"
   override protected val supportPurge: Boolean = false
-  private def isSupportedVersion = isScalaV212 || isSparkV40OrGreater
+  private def isSupportedVersion = isScalaV212 || (isScalaV213 && isSparkV40OrGreater)
   override protected val sqlExtensions: String =
     if (isSupportedVersion) "org.apache.paimon.spark.extensions.PaimonSparkSessionExtensions"
     else ""
